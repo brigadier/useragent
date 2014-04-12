@@ -1,21 +1,25 @@
 -module(useragent).
 -export([parse/1, parse/2]).
 
+
 -record(browser, {name :: browser_name(),
                   family :: browser_family(),
                   type :: browser_type(),
                   manufacturer :: browser_manufacturer(),
                   engine :: browser_engine(),
                   in=[] :: [binary()],
-                  out=[] :: [binary()]}).
+                  out=[] :: [binary()],
+                  postprocess=undefined :: postprocess_fun()}).
 -record(os, {name :: os_name(),
              family :: os_family(),
              type :: os_type(),
              manufacturer :: os_manufacturer(),
              in=[] :: [binary()],
-             out=[] :: [binary()]}).
+             out=[] :: [binary()],
+             postprocess=undefined :: postprocess_fun()}).
 
 -type user_agent_string() :: iolist() | binary().
+-type postprocess_fun() :: undefined | fun((X :: browser(), Y :: iolist()) -> browser()) | fun((X :: os()) -> os()).
 
 -type user_agent() :: [{string, iolist()} |
                        {browser, browser()} |
@@ -25,15 +29,17 @@
                  |  {family, browser_family()}
                  |  {type, browser_type()}
                  |  {manufacturer, browser_manufacturer()}
-                 |  {engine, browser_engine()}].
+                 |  {engine, browser_engine()}
+                 |  {postprocess, postprocess_fun()}].
 
 -type os() :: [{name, os_name()} |
                {family, os_family()} |
-               {type, os_type()} |
-               {manufacturer, os_manufacturer()}].
-
-%% browser subtypes
--type browser_version() :: term().
+               {type, os_type()} |                                                                                                                                              
+               {manufacturer, os_manufacturer()} |                                                                                                                              
+               {postprocess, postprocess_fun()}].                                                                                                                               
+                                                                                                                                                                                
+%% browser subtypes                                                                                                                                                             
+-type browser_version() :: term().                                                                                                                                              
 -type browser_name() :: binary().
 
 -type browser_family() :: opera | konqueror | outlook | ie | chrome
@@ -58,7 +64,7 @@
 
 -type os_type() :: computer | mobile | tablet | dmr | game_console | undefined.
 
--type os_family() :: windows | android | ios | mac_osx | mac_os | maemo | bada
+-type os_family() :: windows | linux | android | bsd | ios | mac_osx | mac_os | maemo | bada
                    | google_tv | kindle | symbian | series40 | sony_ericsson
                    | sun | psp | wii | blackberry | roku | undefined.
 
@@ -119,7 +125,17 @@ parse_sub(UA, Children, InPos, OutPos, Default) ->
              end || Item <- Children],
         Default
     catch
-        Term -> Term
+        Term ->
+          case Term of
+            {browser, _, _, _, _, _, _, _, undefined} ->
+              Term;
+            {browser, _, _, _, _, _, _, _, F} ->
+              F(Term, UA);
+            {os, _, _, _, _, _, _, undefined} ->
+              Term;
+            {os, _, _, _, _, _, _, F} ->
+              F(Term, UA)
+          end
     end.
 
 match(UA, InPattern, OutPattern) ->
@@ -128,8 +144,10 @@ match(UA, InPattern, OutPattern) ->
 
 browsers() ->
     Opera=#browser{name= <<"Opera">>, family=opera, type=web, manufacturer=opera, engine=presto, in=[<<"opera">>]},
+    OperaWebkit=#browser{name= <<"Opera">>, family=opera, type=web, manufacturer=opera, engine=webkit, in=[<<"opr">>]},
     Outlook=#browser{name= <<"Outlook">>, family=outlook, type=email, manufacturer=microsoft, engine=word, in=[<<"msoffice">>]},
     IE=#browser{name= <<"Internet Explorer">>, family=ie, type=web, manufacturer=microsoft, engine=trident, in=[<<"msie">>]},
+    IE11=#browser{name= <<"Internet Explorer">>, family=ie, type=web, manufacturer=microsoft, engine=trident, in=[<<"trident">>]},
     Chrome=#browser{name= <<"Chrome">>, family=chrome, type=web, manufacturer=google, engine=webkit, in=[<<"chrome">>]},
     Safari=#browser{name= <<"Safari">>, family=safari, type=web, manufacturer=apple, engine=webkit, in=[<<"safari">>]},
     Thundr=#browser{name= <<"Thunderbird">>, family=thunderbird, type=email, manufacturer=mozilla, engine=gecko, in=[<<"thunderbird">>]},
@@ -139,8 +157,54 @@ browsers() ->
      %% Opera
      [Opera
       ,Opera#browser{name= <<"Opera Mini">>, type=mobile, in=[<<"opera mini">>]}
-      ,Opera#browser{name= <<"Opera 10">>, in=[<<"opera/9.8">>]}
-      ,Opera#browser{name= <<"Opera 9">>, in=[<<"opera/9">>]}
+      ,Opera#browser{name= <<"Opera">>,engine=presto, in=[<<"version">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*version/(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Opera ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
+      ,Opera#browser{name= <<"Opera">>,engine=presto, in=[<<"opera ">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*opera\\s(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Opera ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
+      ,Opera#browser{name= <<"Opera">>,engine=webkit, in=[<<"opera/">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*opera/(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Opera ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
+     ],
+     [OperaWebkit
+       ,OperaWebkit#browser{name= <<"Opera">>,engine=webkit, type=mobile, in=[<<"mobile">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*opr/(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Opera ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
+       ,OperaWebkit#browser{name= <<"Opera">>,engine=webkit, in=[<<"opr/">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*opr/(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Opera ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
+
      ],
      %% Konqueror
      [#browser{name= <<"Konqueror">>, family=konqueror, type=web, engine=khtml, in=[<<"konqueror">>]}
@@ -153,31 +217,57 @@ browsers() ->
      %% IE
      [IE
       ,IE#browser{name= <<"Windows Live Mail">>, type=email, in=[<<"outlook-express/7.0">>]}
-      ,IE#browser{name= <<"IE Mobile 9">>, type=mobile, in=[<<"iemobile/9">>]}
-      ,IE#browser{name= <<"IE Mobile 7">>, type=mobile, in=[<<"iemobile 7">>]}
-      ,IE#browser{name= <<"IE Mobile 6">>, type=mobile, in=[<<"iemobile 6">>]}
-      ,IE#browser{name= <<"Internet Explorer 10">>, in=[<<"msie 10">>]}
-      ,IE#browser{name= <<"Internet Explorer 9">>, in=[<<"msie 9">>]}
-      ,IE#browser{name= <<"Internet Explorer 8">>, in=[<<"msie 8">>]}
-      ,IE#browser{name= <<"Internet Explorer 7">>, in=[<<"msie 7">>]}
-      ,IE#browser{name= <<"Internet Explorer 6">>, in=[<<"msie 6">>]}
+
+      ,IE#browser{name= <<"IE Mobile 11">>, type=mobile, in=[<<"iemobile">>],
+
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*iemobile[/\\s](\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"IE Mobile ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+
+      }
       ,IE#browser{name= <<"Internet Explorer 5.5">>, in=[<<"msie 5.5">>]}
-      ,IE#browser{name= <<"Internet Explorer 5">>, in=[<<"msie 5">>]}
+      ,IE#browser{name= <<"Internet Explorer">>, in=[<<"msie">>],
+
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*msie[/\\s](\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Internet Explorer ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+     }
+     ,IE#browser{name= <<"Internet Explorer">>, in=[<<"trident">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*rv:(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Internet Explorer ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+     }
+     ],
+      [IE11
+
+     ,IE11#browser{name= <<"Internet Explorer">>, in=[<<"trident">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*rv:(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Internet Explorer ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+     }
      ],
      %% Chrome
      [Chrome
-      ,Chrome#browser{name= <<"Chrome 19">>, in=[<<"chrome/19">>]}
-      ,Chrome#browser{name= <<"Chrome 18">>, in=[<<"chrome/18">>]}
-      ,Chrome#browser{name= <<"Chrome 17">>, in=[<<"chrome/17">>]}
-      ,Chrome#browser{name= <<"Chrome 16">>, in=[<<"chrome/16">>]}
-      ,Chrome#browser{name= <<"Chrome 15">>, in=[<<"chrome/15">>]}
-      ,Chrome#browser{name= <<"Chrome 14">>, in=[<<"chrome/14">>]}
-      ,Chrome#browser{name= <<"Chrome 13">>, in=[<<"chrome/13">>]}
-      ,Chrome#browser{name= <<"Chrome 12">>, in=[<<"chrome/12">>]}
-      ,Chrome#browser{name= <<"Chrome 11">>, in=[<<"chrome/11">>]}
-      ,Chrome#browser{name= <<"Chrome 10">>, in=[<<"chrome/10">>]}
-      ,Chrome#browser{name= <<"Chrome 9">>, in=[<<"chrome/9">>]}
-      ,Chrome#browser{name= <<"Chrome 8">>, in=[<<"chrome/8">>]}
+       ,Chrome#browser{name= <<"Chrome">>, in=[<<"chrome">>],
+        postprocess = fun(Browser, UA) ->
+          case re:run(UA, ".*chrome/(\\d+).*", [{capture, all_but_first, binary}]) of
+            {match, [Vsn]} -> Browser#browser{name= <<"Chrome ", Vsn/binary>>};
+            _ -> Browser
+          end
+        end
+       }
      ],
      %% Omniweb
      [#browser{name= <<"OmniWeb">>, family=omniweb, type=web, engine=webkit, in=[<<"omniweb">>]}
@@ -185,10 +275,23 @@ browsers() ->
      %% Safari
      [Safari
       ,Safari#browser{name= <<"Chrome Mobile">>, type=mobile, manufacturer=google, in=[<<"crmo">>]}
-      ,Safari#browser{name= <<"Mobile Safari">>, type=mobile, in=[<<"mobile safari">>,<<"mobile/">>]}
+      ,Safari#browser{name= <<"Mobile Safari">>, type=mobile, in=[<<"mobile safari">>,<<"mobile/">>],
+        postprocess = fun(Browser, UA) ->
+            case re:run(UA, ".*version/(\\d+).*", [{capture, all_but_first, binary}]) of
+              {match, [Vsn]} -> Browser#browser{name= <<"Mobile Safari ", Vsn/binary>>};
+              _ -> Browser
+            end
+          end
+      }
       ,Safari#browser{name= <<"Silk">>, manufacturer=amazon, in=[<<"silk/">>]}
-      ,Safari#browser{name= <<"Safari 5">>, in=[<<"version/5">>]}
-      ,Safari#browser{name= <<"Safari 4">>, in=[<<"version/4">>]}
+      ,Safari#browser{name= <<"Safari 5">>, in=[<<"version">>],
+       postprocess = fun(Browser, UA) ->
+            case re:run(UA, ".*version/(\\d+).*", [{capture, all_but_first, binary}]) of
+              {match, [Vsn]} -> Browser#browser{name= <<"Safari ", Vsn/binary>>};
+              _ -> Browser
+            end
+          end
+       }
      ],
      %% Dolphin2
      [#browser{name= <<"Samsung Dolphin 2">>, family=dolfin2, type=mobile, manufacturer=samsung, engine=webkit, in=[<<"dolfin/2">>]}
@@ -201,14 +304,14 @@ browsers() ->
      ],
      %% thunderbird
      [Thundr
-      ,Thundr#browser{name= <<"Thunderbird 12">>, in=[<<"thunderbird/12">>]}
-      ,Thundr#browser{name= <<"Thunderbird 11">>, in=[<<"thunderbird/11">>]}
-      ,Thundr#browser{name= <<"Thunderbird 10">>, in=[<<"thunderbird/10">>]}
-      ,Thundr#browser{name= <<"Thunderbird 8">>, in=[<<"thunderbird/8">>]}
-      ,Thundr#browser{name= <<"Thunderbird 7">>, in=[<<"thunderbird/7">>]}
-      ,Thundr#browser{name= <<"Thunderbird 6">>, in=[<<"thunderbird/6">>]}
-      ,Thundr#browser{name= <<"Thunderbird 3">>, in=[<<"thunderbird/3">>]}
-      ,Thundr#browser{name= <<"Thunderbird 2">>, in=[<<"thunderbird/2">>]}
+      ,Thundr#browser{name= <<"Thunderbird">>, in=[<<"thunderbird">>],
+       postprocess = fun(Browser, UA) ->
+            case re:run(UA, ".*thunderbird/(\\d+).*", [{capture, all_but_first, binary}]) of
+              {match, [Vsn]} -> Browser#browser{name= <<"Thunderbird ", Vsn/binary>>};
+              _ -> Browser
+            end
+          end
+       }
      ],
      %% Camino
      [Cam
@@ -220,28 +323,15 @@ browsers() ->
      %% firefox
      [FF
       ,FF#browser{name= <<"Firefox 3 Mobile">>, type=mobile, in=[<<"firefox/3.5 maemo">>]}
-      ,FF#browser{name= <<"Firefox 22">>, in=[<<"firefox/22">>]}
-      ,FF#browser{name= <<"Firefox 21">>, in=[<<"firefox/21">>]}
-      ,FF#browser{name= <<"Firefox 20">>, in=[<<"firefox/20">>]}
-      ,FF#browser{name= <<"Firefox 19">>, in=[<<"firefox/19">>]}
-      ,FF#browser{name= <<"Firefox 18">>, in=[<<"firefox/18">>]}
-      ,FF#browser{name= <<"Firefox 17">>, in=[<<"firefox/17">>]}
-      ,FF#browser{name= <<"Firefox 16">>, in=[<<"firefox/16">>]}
-      ,FF#browser{name= <<"Firefox 15">>, in=[<<"firefox/15">>]}
-      ,FF#browser{name= <<"Firefox 14">>, in=[<<"firefox/14">>]}
-      ,FF#browser{name= <<"Firefox 13">>, in=[<<"firefox/13">>]}
-      ,FF#browser{name= <<"Firefox 12">>, in=[<<"firefox/12">>]}
-      ,FF#browser{name= <<"Firefox 11">>, in=[<<"firefox/11">>]}
-      ,FF#browser{name= <<"Firefox 10">>, in=[<<"firefox/10">>]}
-      ,FF#browser{name= <<"Firefox 9">>, in=[<<"firefox/9">>]}
-      ,FF#browser{name= <<"Firefox 8">>, in=[<<"firefox/8">>]}
-      ,FF#browser{name= <<"Firefox 7">>, in=[<<"firefox/7">>]}
-      ,FF#browser{name= <<"Firefox 6">>, in=[<<"firefox/6">>]}
-      ,FF#browser{name= <<"Firefox 5">>, in=[<<"firefox/5">>]}
-      ,FF#browser{name= <<"Firefox 4">>, in=[<<"firefox/4">>]}
-      ,FF#browser{name= <<"Firefox 3">>, in=[<<"firefox/3">>]}
-      ,FF#browser{name= <<"Firefox 2">>, in=[<<"firefox/2">>]}
       ,FF#browser{name= <<"Firefox 1.5">>, in=[<<"firefox/1.5">>]}
+      ,FF#browser{name= <<"Firefox">>, in=[<<"firefox">>],
+        postprocess = fun(Browser, UA) ->
+            case re:run(UA, ".*firefox/(\\d+).*", [{capture, all_but_first, binary}]) of
+              {match, [Vsn]} -> Browser#browser{name= <<"Firefox ", Vsn/binary>>};
+              _ -> Browser
+            end
+          end
+        }
      ],
      %% seamonkey
      [#browser{name= <<"SeaMonkey">>, family=seamonkey, type=web, engine=gecko, in=[<<"seamonkey">>]}
@@ -287,12 +377,17 @@ os() ->
             manufacturer=blackberry, in=[<<"blackberry">>]},
     [%% Windows
      [Win,
+      Win#os{name= <<"Windows 8 RT">>,type=tablet, in=[<<"arm;">>], out=[]},
+      Win#os{name= <<"Windows 8.1">>, in=[<<"windows nt 6.3">>], out=[]},
       Win#os{name= <<"Windows 8">>, in=[<<"windows nt 6.2">>], out=[]},
       Win#os{name= <<"Windows 7">>, in=[<<"windows nt 6.1">>], out=[]},
       Win#os{name= <<"Windows Vista">>, in=[<<"windows nt 6">>], out=[]},
       Win#os{name= <<"Windows 2000">>, in=[<<"windows nt 5.0">>], out=[]},
       Win#os{name= <<"Windows XP">>, in=[<<"windows nt 5">>], out=[]},
-      Win#os{name= <<"Windows Mobile 7">>, type=mobile, in=[<<"windows phone os 7">>], out=[]},
+      Win#os{name= <<"Windows Phone 8">>, type=mobile, in=[<<"windows phone 8">>], out=[]},
+      Win#os{name= <<"Windows Phone 7.8">>, type=mobile, in=[<<"windows phone os 7.8">>], out=[]},
+      Win#os{name= <<"Windows Phone 7.5">>, type=mobile, in=[<<"windows phone os 7.5">>], out=[]},
+      Win#os{name= <<"Windows Phone 7">>, type=mobile, in=[<<"windows phone os 7">>], out=[]},
       Win#os{name= <<"Windows Mobile">>, type=mobile, in=[<<"windows ce">>], out=[]},
       Win#os{name= <<"Windows 98">>, in=[<<"windows 98">>,<<"win98">>]}],
      %% Android
@@ -308,8 +403,19 @@ os() ->
      [#os{name= <<"PalmOS">>, family=palm, type=mobile, manufacturer=hp, in=[<<"palm">>]}],
      % ios
      [IOs,
-      IOs#os{name= <<"iOS 5 (iPhone)">>, in=[<<"iphone os 5">>]},
-      IOs#os{name= <<"iOS 4 (iPhone)">>, in=[<<"iphone os 4">>]},
+       IOs#os{name= <<"iOS 6 (iPhone)">>, in=[<<"iphone os">>],
+        postprocess = fun(Os, UA) ->
+            case re:run(UA, ".*iphone os (\\d+).*", [{capture, all_but_first, binary}]) of
+              {match, [Vsn]} -> Os#os{name= <<"iOS (iPhone) ", Vsn/binary>>};
+              _ -> Os
+            end
+          end
+
+
+      },
+%%       IOs#os{name= <<"iOS 6 (iPhone)">>, in=[<<"iphone os 6">>]},
+%%        IOs#os{name= <<"iOS 5 (iPhone)">>, in=[<<"iphone os 5">>]},
+%%       IOs#os{name= <<"iOS 4 (iPhone)">>, in=[<<"iphone os 4">>]},
       IOs#os{name= <<"Mac OS X (iPad)">>, type=tablet, in=[<<"ipad">>]},
       IOs#os{name= <<"Mac OS X (iPhone)">>, in=[<<"iphone">>]},
       IOs#os{name= <<"Mac OS X (iPod)">>, in=[<<"ipod">>]}],
@@ -331,6 +437,7 @@ os() ->
       Kind#os{name= <<"Linux (Kindle 2)">>, in=[<<"kindle/2">>]}],
      %% linux
      [#os{name= <<"Linux">>, family=linux, type=computer, in=[<<"linux">>,<<"camelhttpstream">>]}],
+      [#os{name= <<"*BSD">>, family=bsd, type=computer, in=[<<"bsd">>]}],
      %% symbian
      [Sym,
       Sym#os{name= <<"Symbian OS 9.x">>, in=[<<"symbianos/9">>,<<"series60/3">>]},
