@@ -13,6 +13,7 @@
 }).
 -record(os, {
 	name :: os_name(),
+	vsn = <<>> :: os_vsn(),
 	family :: os_family(),
 	type :: os_type(),
 	manufacturer :: os_manufacturer(),
@@ -49,6 +50,7 @@
 %% -type browser_version() :: term().
 -type browser_name() :: binary().
 -type browser_vsn() :: binary().
+-type os_vsn() :: binary().
 
 -type browser_family() :: opera | konqueror | outlook | ie | chrome
 | omniweb | safari | dolfin2 | apple_mail | tizen
@@ -74,4 +76,4 @@
 
 -type os_family() :: windows | linux | android | bsd | ios | mac_osx | mac_os | maemo | bada | tizen
 | google_tv | kindle | symbian | series40 | sony_ericsson
-| sun | psp | wii | blackberry | roku | midp | undefined.
+| sun | psp | wii | blackberry | roku | midp | chrome_os | undefined.

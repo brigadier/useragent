@@ -1,18 +1,14 @@
 -module(useragent).
--export([parse/1, parse/2]).
+-export([parse/1
+]).
 -include("useragent.hrl").
 
 
 % -spec is_mobile_device...
 
 -spec parse(user_agent_string()) -> user_agent().
-parse(UA) -> parse(UA, utf8).
-
--spec parse(user_agent_string(), unicode:encoding()) -> user_agent().
-parse(UA, Encoding) when is_list(UA) ->
-	parse(iolist_to_binary(UA), Encoding);
-parse(UA, Encoding) ->
-	UALower = list_to_binary(string:to_lower(binary_to_list(characters_to_binary(UA, Encoding)))),
+parse(UA) ->
+	UALower = unicode:characters_to_binary(string:to_lower(unicode:characters_to_list(UA, utf8))),
 	{parse_browser(UALower, browsers()), parse_os(UALower, os())}.
 
 
@@ -56,7 +52,7 @@ parse(UA, [[H | T] | Candidates], InPos, OutPos) ->
 	OutPat = element(OutPos, H),
 	case {match(UA, InPat, OutPat), T} of
 		{{true, true}, []} -> % generic one fits, no children
-			H;
+			maybe_postprocess(H, UA);
 		{{true, true}, _} -> % check for more precise entries
 			parse_sub(UA, T, InPos, OutPos, H);
 		{{true, false}, _} -> % check for more precise entries
@@ -76,14 +72,19 @@ parse_sub(UA, Children, InPos, OutPos, Default) ->
 			 end || Item <- Children],
 		Default
 	catch
-		Term ->
-			case Term of
-				#browser{postprocess = undefined} -> Term;
-				#browser{postprocess = F} -> F(Term, UA);
-				#os{postprocess = undefined} -> Term;
-				#os{postprocess = F} -> F(Term, UA)
-			end
+		Term -> maybe_postprocess(Term, UA)
 	end.
+
+
+maybe_postprocess(Term, UA) ->
+	case Term of
+		#browser{postprocess = undefined} -> Term;
+		#browser{postprocess = F} -> F(Term, UA);
+		#os{postprocess = undefined} -> Term;
+		#os{postprocess = F} -> F(Term, UA)
+	end.
+
+
 
 match(UA, InPattern, OutPattern) ->
 	{lists:any(fun(Pat) -> nomatch =/= binary:match(UA, Pat) end, InPattern),
@@ -199,7 +200,7 @@ browsers() ->
 						  end
 
 		}
-%%       ,IE#browser{name= <<"Internet Explorer 5.5">>, in=[<<"msie 5.5">>]} %%
+
 			, IE#browser{name = <<"Internet Explorer">>, in = [<<"msie">>],
 
 			postprocess = fun(Browser, UA) ->
@@ -219,6 +220,14 @@ browsers() ->
 		}
 		],
 		[IE11
+			, IE11#browser{name = <<"Internet Explorer Mobile">>, in = [<<"iemobile">>],  type = mobile,
+			postprocess = fun(Browser, UA) ->
+				case re:run(UA, ".*rv:([\\.\\d]+).*", [{capture, all_but_first, binary}]) of
+					{match, [Vsn]} -> Browser#browser{vsn = Vsn};
+					_ -> Browser
+				end
+						  end
+		}
 
 			, IE11#browser{name = <<"Internet Explorer">>, in = [<<"trident">>],
 			postprocess = fun(Browser, UA) ->
@@ -376,6 +385,8 @@ browsers() ->
 	].
 
 os() ->
+
+
 	Win = #os{name = <<"Windows">>, family = windows, type = computer, manufacturer = microsoft,
 		in = [<<"windows">>], out = [<<"palm">>]},
 	Droid = #os{name = <<"Android">>, family = android, type = mobile, manufacturer = google,
@@ -393,30 +404,56 @@ os() ->
 			Win#os{name = <<"Windows Phone">>, type = mobile, in = [<<"windows phone">>], out = [],
 				postprocess = fun(Os, UA) ->
 					case re:run(UA, "windows phone( os)? ([\\.\\d]+)", [{capture, all_but_first, binary}]) of
-						{match, [_, Vsn]} -> Os#os{name = <<"Windows Phone ", Vsn/binary>>};
+						{match, [_, Vsn]} -> Os#os{name = <<"Windows Phone ", Vsn/binary>>, vsn = Vsn};
 						_ -> Os
 					end
 							  end},
-			Win#os{name = <<"Windows 8 RT">>, type = tablet, in = [<<"arm;">>], out = []},
-			Win#os{name = <<"Windows 8.1">>, in = [<<"windows nt 6.3">>], out = []},
-			Win#os{name = <<"Windows 10">>, in = [<<"windows nt 10.">>], out = []},
-			Win#os{name = <<"Windows 8">>, in = [<<"windows nt 6.2">>], out = []},
-			Win#os{name = <<"Windows 7">>, in = [<<"windows nt 6.1">>], out = []},
-			Win#os{name = <<"Windows Vista">>, in = [<<"windows nt 6">>], out = []},
-			Win#os{name = <<"Windows 2000">>, in = [<<"windows nt 5.0">>], out = []},
-			Win#os{name = <<"Windows XP">>, in = [<<"windows nt 5">>], out = []},
-			Win#os{name = <<"Windows Mobile">>, type = mobile, in = [<<"windows ce">>], out = []},
-			Win#os{name = <<"Windows 98">>, in = [<<"windows 98">>, <<"win98">>]}],
-		%% Android
+		 Win#os{name = <<"Windows 98">>, in = [<<"windows 98">>, <<"win98">>]},
+
+		 Win#os{name = <<"Windows 8 RT">>, type = tablet, in = [<<"arm;">>], out = []},
+
+
+		 Win#os{name = <<"Windows">>, in = [<<"windows nt">>], out = [],
+				postprocess = fun(Os, UA) ->
+								case re:run(UA, "windows nt ([\\.\\d]+)", [{capture, all_but_first, binary}]) of
+									{match, [Vsn]} ->
+										Name = case Vsn of
+												   <<"6.3", _/binary>> -> <<"Windows 8.1">>;
+												   <<"10.", _/binary>> -> <<"Windows 10">>;
+												   <<"6.2", _/binary>> -> <<"Windows 8">>;
+												   <<"6.1", _/binary>> -> <<"Windows 7">>;
+												   <<"6", _/binary>> -> <<"Windows Vista">>;
+												   <<"5.0", _/binary>> -> <<"Windows 2000">>;
+												   <<"5", _/binary>> -> <<"Windows XP">>;
+												   _ -> <<"Windows NT">>
+											   end,
+
+
+										Os#os{name = Name, vsn = Vsn};
+									_ -> Os
+								end
+							  end},
+			Win#os{name = <<"Windows Mobile">>, type = mobile, in = [<<"windows ce">>], out = []}
+			],
+		[#os{name = <<"Android (Google TV)">>, family = google_tv, type = dmr,
+			manufacturer = google, in = [<<"googletv">>]}],
 		[Droid,
-			Droid#os{name = <<"Android 3.x Tablet">>, type = tablet, in = [<<"android 3">>]},
-			Droid#os{name = <<"Android 4.x Tablet">>, type = tablet, in = [<<"xoom">>, <<"transformer">>]},
-			Droid#os{name = <<"Android 4.x">>, in = [<<"android 4">>, <<"android-4">>]},
-			Droid#os{name = <<"Android 5.x">>, in = [<<"android 5">>]},
-			Droid#os{name = <<"Android 2.x Tablet">>, type = tablet,
-				in = [<<"kindle fire">>, <<"gt-p1000">>, <<"sch-i800">>]},
-			Droid#os{name = <<"Android 2.x">>, in = [<<"android 2">>]},
-			Droid#os{name = <<"Android 1.x">>, in = [<<"android 1">>]}],
+		 	Droid#os{name = <<"Android Phone">>, type = mobile, in = [<<"mobile">>],
+				postprocess = fun(Os, UA) ->
+								case re:run(UA, "android ([\\.\\d]+)", [{capture, all_but_first, binary}]) of
+									{match, [Vsn]} -> Os#os{name = <<"Android Phone ", Vsn/binary>>, vsn = Vsn};
+									_ -> Os
+								end
+							  end},
+			 Droid#os{name = <<"Android Tablet">>, type = tablet, in = [<<"android">>],
+				 postprocess = fun(Os, UA) ->
+									case re:run(UA, "android ([\\.\\d]+)", [{capture, all_but_first, binary}]) of
+										{match, [Vsn]} -> Os#os{name = <<"Android Tablet ", Vsn/binary>>, vsn = Vsn};
+										_ -> Os
+									end
+							  end}
+
+	    ],
 		[#os{name = <<"WebOS">>, family = webos, type = mobile, manufacturer = hp, in = [<<"webos">>]}],
 		[#os{name = <<"PalmOS">>, family = palm, type = mobile, manufacturer = hp, in = [<<"palm">>]}],
 
@@ -424,8 +461,10 @@ os() ->
 		[IOs,
 			IOs#os{name = <<"iOS (iPhone)">>, in = [<<"iphone os">>],
 				postprocess = fun(Os, UA) ->
-					case re:run(UA, ".*iphone os (\\d+).*", [{capture, all_but_first, binary}]) of
-						{match, [Vsn]} -> Os#os{name = <<"iOS (iPhone) ", Vsn/binary>>};
+					case re:run(UA, ".*iphone os ([_\\d]+)", [{capture, all_but_first, binary}]) of
+						{match, [Vsn]} ->
+							Vsn2 = binary:replace(Vsn, <<"_">>, <<".">>, [global]),
+							Os#os{name = <<"iOS (iPhone) ", Vsn2/binary>>, vsn = Vsn2};
 						_ -> Os
 					end
 							  end
@@ -434,8 +473,10 @@ os() ->
 			},
 			IOs#os{name = <<"iOS (iPad)">>, type = tablet, in = [<<"ipad">>],
 				postprocess = fun(Os, UA) ->
-					case re:run(UA, ".*cpu os (\\d+).*", [{capture, all_but_first, binary}]) of
-						{match, [Vsn]} -> Os#os{name = <<"iOS (iPad) ", Vsn/binary>>};
+					case re:run(UA, ".*cpu os ([_\\d]+)", [{capture, all_but_first, binary}]) of
+						{match, [Vsn]} ->
+							Vsn2 = binary:replace(Vsn, <<"_">>, <<".">>, [global]),
+							Os#os{name = <<"iOS (iPad) ", Vsn2/binary>>, vsn = Vsn2};
 						_ -> Os
 					end
 							  end
@@ -445,7 +486,28 @@ os() ->
 		],
 		% osx
 		[#os{name = <<"Mac OS X">>, family = mac_osx, type = computer, manufacturer = apple,
-			in = [<<"mac os x">>, <<"cfnetwork">>]}],
+			in = [<<"mac os x">>, <<"cfnetwork">>],
+			postprocess = fun(Os, UA) ->
+					case re:run(UA, "os x ([_\\d]+)", [{capture, all_but_first, binary}]) of
+						{match, [Vsn]} ->
+							Vsn2 = binary:replace(Vsn, <<"_">>, <<".">>, [global]),
+							Os#os{name = <<"Mac OS X ", Vsn2/binary>>, vsn = Vsn2};
+						_ -> Os
+					end
+							  end
+
+			}],
+		 [#os{name = <<"ChromeOS">>, family = chrome_os, type = computer, manufacturer = google,
+			in = [<<"cros">>],
+			postprocess = fun(Os, UA) ->
+					case re:run(UA, "cros ([a-zA-Z0-9_]{1,8}) ([\\.\\d]+)", [{capture, all_but_first, binary}]) of
+						{match, [Type, Vsn]} ->
+							Os#os{name = <<"ChromeOS (", Type/binary, ") ", Vsn/binary>>, vsn = Vsn};
+						_ -> Os
+					end
+							  end
+
+			}],
 		% os < osx
 		[#os{name = <<"Mac OS">>, family = mac_os, type = computer, manufacturer = apple, in = [<<"mac">>]}],
 		%% maemo
@@ -454,9 +516,6 @@ os() ->
 		[#os{name = <<"Bada">>, family = bada, type = mobile, manufacturer = samsung, in = [<<"bada">>]}],
 		[#os{name = <<"Tizen">>, family = tizen, type = mobile, manufacturer = samsung, in = [<<"tizen">>]}],
 
-		%% google tv
-		[#os{name = <<"Android (Google TV)">>, family = google_tv, type = dmr,
-			manufacturer = google, in = [<<"googletv">>]}],
 		%% kindle
 		[Kind,
 			Kind#os{name = <<"Linux (Kindle 3)">>, in = [<<"kindle/3">>]},
@@ -492,10 +551,3 @@ os() ->
 
 		]
 	].
-
-characters_to_binary(Binary, Encoding) ->
-	case unicode:characters_to_binary(Binary, Encoding, latin1) of
-		{error, Result, _} -> Result;
-		{incomplete, Result, _} -> Result;
-		Result -> Result
-	end.
